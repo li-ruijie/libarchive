@@ -1,0 +1,769 @@
+name: Build libarchive
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream libarchive release tag (e.g. v3.8.5)"
+        required: true
+        type: string
+  schedule:
+    # Check for new releases daily at midnight UTC
+    - cron: '0 0 * * *'
+
+permissions: {}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Get tag and check if release exists
+  # ---------------------------------------------------------------------------
+  check-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.get-tag.outputs.tag }}
+      should-build: ${{ steps.check.outputs.should-build }}
+    steps:
+      - name: Get tag
+        id: get-tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=$(curl -s https://api.github.com/repos/libarchive/libarchive/tags | jq -r '.[0].name')
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Using tag: $TAG"
+
+      - name: Validate tag format
+        run: |
+          TAG="${{ steps.get-tag.outputs.tag }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[a-z]?$ ]]; then
+            echo "::error::Invalid tag format '$TAG'. Expected vX.Y.Z (e.g. v3.8.5)"
+            exit 1
+          fi
+          echo "Tag '$TAG' validated"
+
+      - name: Check if release exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.get-tag.outputs.tag }}"
+          if gh release view "$TAG" --repo ${{ github.repository }} > /dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping build"
+            echo "should-build=false" >> $GITHUB_OUTPUT
+          else
+            echo "Release $TAG does not exist, will build"
+            echo "should-build=true" >> $GITHUB_OUTPUT
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Windows static build (MSVC x64)
+  # ---------------------------------------------------------------------------
+  windows-static:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: Remove Strawberry Perl (avoids DLL conflicts)
+        run: Remove-Item -Path C:\Strawberry -Recurse -Force
+
+      - name: Install vcpkg dependencies
+        run: >
+          vcpkg install
+          zlib bzip2 liblzma lz4 zstd openssl libiconv libxml2
+          --triplet x64-windows-static
+
+      - name: "Pass 1: Build static library + CLI tools"
+        run: |
+          cmake -S libarchive -B build-static ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_INSTALL_PREFIX=install-static ^
+            -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
+            -DBUILD_SHARED_LIBS=OFF ^
+            -DMSVC_USE_STATIC_CRT=ON ^
+            -DENABLE_TAR=ON ^
+            -DENABLE_CPIO=ON ^
+            -DENABLE_CAT=ON ^
+            -DENABLE_TEST=OFF ^
+            -DWINDOWS_VERSION=WIN10
+          cmake --build build-static --config Release
+        shell: cmd
+
+      - name: "Pass 1: Install"
+        run: |
+          taskkill /f /im vctip.exe 2>nul
+          timeout /t 5 /nobreak >nul
+          cmake --install build-static --config Release || (
+            echo Retrying install...
+            timeout /t 10 /nobreak >nul
+            taskkill /f /im vctip.exe 2>nul
+            timeout /t 5 /nobreak >nul
+            cmake --install build-static --config Release
+          )
+        shell: cmd
+
+      - name: "Pass 2: Build self-contained DLL"
+        run: |
+          cmake -S libarchive -B build-static-dll ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DMSVC_USE_STATIC_CRT=ON ^
+            -DENABLE_TAR=OFF ^
+            -DENABLE_CPIO=OFF ^
+            -DENABLE_CAT=OFF ^
+            -DENABLE_TEST=OFF ^
+            -DWINDOWS_VERSION=WIN10
+          cmake --build build-static-dll --config Release
+        shell: cmd
+
+      - name: Collect static artifacts
+        run: |
+          copy build-static-dll\bin\Release\archive.dll install-static\bin\libarchive.dll
+          copy build-static-dll\libarchive\Release\archive.lib install-static\lib\libarchive.lib
+        shell: cmd
+
+      - name: Capture library versions
+        run: |
+          $tag = "${{ needs.check-release.outputs.tag }}"
+          $out = "libarchive-${tag}-windows-msvc-x64-static-libraries.txt"
+
+          "Build Environment" | Out-File $out
+          "=================" | Out-File $out -Append
+          "Platform: Windows (MSVC x64 Static)" | Out-File $out -Append
+          "Runner: $env:ImageVersion" | Out-File $out -Append
+          "Date: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File $out -Append
+          "" | Out-File $out -Append
+
+          "Embedded Library Versions (statically linked)" | Out-File $out -Append
+          "==============================================" | Out-File $out -Append
+          vcpkg list --triplet x64-windows-static | Out-File $out -Append
+          "" | Out-File $out -Append
+
+          "Runtime Dependencies" | Out-File $out -Append
+          "====================" | Out-File $out -Append
+          "All compression/crypto libraries statically embedded. Runtime requires only:" | Out-File $out -Append
+          "- KERNEL32.dll" | Out-File $out -Append
+          "- bcrypt.dll" | Out-File $out -Append
+          "- UCRT (api-ms-win-crt-*)" | Out-File $out -Append
+        shell: pwsh
+
+      - name: Upload static artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static
+          path: install-static/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Windows shared build (MSVC x64)
+  # ---------------------------------------------------------------------------
+  windows-shared:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: Remove Strawberry Perl (avoids DLL conflicts)
+        run: Remove-Item -Path C:\Strawberry -Recurse -Force
+
+      - name: Install vcpkg dependencies
+        run: >
+          vcpkg install
+          zlib bzip2 liblzma lz4 zstd openssl libiconv libxml2
+          --triplet x64-windows
+
+      - name: Build shared library
+        run: |
+          cmake -S libarchive -B build-shared ^
+            -G "Visual Studio 17 2022" -A x64 ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_INSTALL_PREFIX=install-shared ^
+            -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows ^
+            -DBUILD_SHARED_LIBS=ON ^
+            -DMSVC_USE_STATIC_CRT=OFF ^
+            -DENABLE_TAR=ON ^
+            -DENABLE_CPIO=ON ^
+            -DENABLE_CAT=ON ^
+            -DENABLE_TEST=OFF ^
+            -DWINDOWS_VERSION=WIN10
+          cmake --build build-shared --config Release
+        shell: cmd
+
+      - name: Install shared library
+        run: |
+          taskkill /f /im vctip.exe 2>nul
+          timeout /t 5 /nobreak >nul
+          cmake --install build-shared --config Release || (
+            echo Retrying install...
+            timeout /t 10 /nobreak >nul
+            taskkill /f /im vctip.exe 2>nul
+            timeout /t 5 /nobreak >nul
+            cmake --install build-shared --config Release
+          )
+        shell: cmd
+
+      - name: Rename shared library files
+        run: |
+          ren install-shared\bin\archive.dll libarchive.dll
+          ren install-shared\lib\archive.lib libarchive.lib
+        shell: cmd
+
+      - name: Capture library versions
+        run: |
+          $tag = "${{ needs.check-release.outputs.tag }}"
+          $out = "libarchive-${tag}-windows-msvc-x64-dynamic-libraries.txt"
+
+          # Set up Visual Studio dev environment for dumpbin
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64'
+
+          "Build Environment" | Out-File $out
+          "=================" | Out-File $out -Append
+          "Platform: Windows (MSVC x64 Dynamic)" | Out-File $out -Append
+          "Runner: $env:ImageVersion" | Out-File $out -Append
+          "Date: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')" | Out-File $out -Append
+          "" | Out-File $out -Append
+
+          "vcpkg Dependencies (x64-windows)" | Out-File $out -Append
+          "=================================" | Out-File $out -Append
+          vcpkg list --triplet x64-windows | Out-File $out -Append
+          "" | Out-File $out -Append
+
+          "DLL Dependencies (libarchive.dll)" | Out-File $out -Append
+          "==================================" | Out-File $out -Append
+          dumpbin /dependents install-shared\bin\libarchive.dll | Out-File $out -Append
+          "" | Out-File $out -Append
+
+          "DLL Dependencies (bsdtar.exe)" | Out-File $out -Append
+          "==============================" | Out-File $out -Append
+          dumpbin /dependents install-shared\bin\bsdtar.exe | Out-File $out -Append
+        shell: pwsh
+
+      - name: Upload shared artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic
+          path: install-shared/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Windows static build (MinGW-w64 UCRT64 x64)
+  # ---------------------------------------------------------------------------
+  windows-mingw-static:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-bzip2
+            mingw-w64-ucrt-x86_64-xz
+            mingw-w64-ucrt-x86_64-lz4
+            mingw-w64-ucrt-x86_64-zstd
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libiconv
+            mingw-w64-ucrt-x86_64-libxml2
+
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        shell: bash
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: "Pass 1: Build static library + CLI tools"
+        run: |
+          cmake -S libarchive -B build-static \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/install-static" \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_EXE_LINKER_FLAGS="-static" \
+            -DENABLE_TAR=ON \
+            -DENABLE_CPIO=ON \
+            -DENABLE_CAT=ON \
+            -DENABLE_TEST=OFF
+          cmake --build build-static
+          cmake --install build-static
+
+      - name: Remove import libraries to force static linking
+        run: find /ucrt64/lib -name '*.dll.a' -delete
+
+      - name: "Pass 2: Build self-contained DLL"
+        run: |
+          cmake -S libarchive -B build-static-dll \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_C_FLAGS="-DLIBXML_STATIC -DLZMA_API_STATIC" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic" \
+            -DCMAKE_C_STANDARD_LIBRARIES="-Wl,-Bstatic -lz -liconv -lxml2 -Wl,-Bdynamic -lws2_32 -lbcrypt -lcrypt32 -lkernel32" \
+            -DENABLE_TAR=OFF \
+            -DENABLE_CPIO=OFF \
+            -DENABLE_CAT=OFF \
+            -DENABLE_TEST=OFF
+          cmake --build build-static-dll
+
+      - name: Collect static artifacts
+        run: |
+          cp build-static-dll/bin/libarchive.dll install-static/bin/
+          cp build-static-dll/libarchive/libarchive.dll.a install-static/lib/ 2>/dev/null || true
+
+      - name: Capture library versions
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          OUT="libarchive-${TAG}-windows-mingw-x64-static-libraries.txt"
+
+          {
+            echo "Build Environment"
+            echo "================="
+            echo "Platform: Windows (MinGW-w64 UCRT64 x64 Static)"
+            echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+
+            echo "Embedded Library Versions (statically linked)"
+            echo "=============================================="
+            pacman -Q mingw-w64-ucrt-x86_64-gcc \
+                      mingw-w64-ucrt-x86_64-zlib \
+                      mingw-w64-ucrt-x86_64-bzip2 \
+                      mingw-w64-ucrt-x86_64-xz \
+                      mingw-w64-ucrt-x86_64-lz4 \
+                      mingw-w64-ucrt-x86_64-zstd \
+                      mingw-w64-ucrt-x86_64-openssl \
+                      mingw-w64-ucrt-x86_64-libiconv \
+                      mingw-w64-ucrt-x86_64-libxml2
+            echo ""
+
+            echo "Runtime Dependencies"
+            echo "===================="
+            echo "All compression/crypto libraries statically embedded. Runtime requires only:"
+            echo "- KERNEL32.dll"
+            echo "- bcrypt.dll"
+            echo "- UCRT (api-ms-win-crt-*)"
+          } > "$OUT"
+
+      - name: Upload static artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static
+          path: install-static/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Windows shared build (MinGW-w64 UCRT64 x64)
+  # ---------------------------------------------------------------------------
+  windows-mingw-shared:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-bzip2
+            mingw-w64-ucrt-x86_64-xz
+            mingw-w64-ucrt-x86_64-lz4
+            mingw-w64-ucrt-x86_64-zstd
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-libiconv
+            mingw-w64-ucrt-x86_64-libxml2
+
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        shell: bash
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: Build shared library + CLI tools
+        run: |
+          cmake -S libarchive -B build-shared \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/install-shared" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DENABLE_TAR=ON \
+            -DENABLE_CPIO=ON \
+            -DENABLE_CAT=ON \
+            -DENABLE_TEST=OFF
+          cmake --build build-shared
+          cmake --install build-shared
+
+      - name: Capture library versions
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          OUT="libarchive-${TAG}-windows-mingw-x64-dynamic-libraries.txt"
+
+          {
+            echo "Build Environment"
+            echo "================="
+            echo "Platform: Windows (MinGW-w64 UCRT64 x64 Dynamic)"
+            echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+
+            echo "MSYS2 Package Versions"
+            echo "======================"
+            pacman -Q mingw-w64-ucrt-x86_64-gcc \
+                      mingw-w64-ucrt-x86_64-zlib \
+                      mingw-w64-ucrt-x86_64-bzip2 \
+                      mingw-w64-ucrt-x86_64-xz \
+                      mingw-w64-ucrt-x86_64-lz4 \
+                      mingw-w64-ucrt-x86_64-zstd \
+                      mingw-w64-ucrt-x86_64-openssl \
+                      mingw-w64-ucrt-x86_64-libiconv \
+                      mingw-w64-ucrt-x86_64-libxml2
+            echo ""
+
+            echo "DLL Dependencies (libarchive.dll)"
+            echo "=================================="
+            ldd install-shared/bin/libarchive.dll
+            echo ""
+
+            echo "DLL Dependencies (bsdtar.exe)"
+            echo "=============================="
+            ldd install-shared/bin/bsdtar.exe
+          } > "$OUT"
+
+      - name: Upload shared artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic
+          path: install-shared/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Linux static build (GCC x86_64)
+  # ---------------------------------------------------------------------------
+  linux-static:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zlib1g-dev libbz2-dev liblzma-dev liblz4-dev libzstd-dev \
+            libxml2-dev libssl-dev
+
+      - name: Build static library + CLI tools
+        run: |
+          cmake -S libarchive -B build-static \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-static \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_TAR=ON \
+            -DENABLE_CPIO=ON \
+            -DENABLE_CAT=ON \
+            -DENABLE_TEST=OFF
+          cmake --build build-static --config Release
+          cmake --install build-static --config Release
+
+      - name: Capture library versions
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          OUT="libarchive-${TAG}-linux-gcc-x64-static-libraries.txt"
+
+          {
+            echo "Build Environment"
+            echo "================="
+            echo "Platform: Linux (GCC x86_64 Static)"
+            echo "Distribution: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
+            echo "Kernel: $(uname -r)"
+            echo "GCC: $(gcc --version | head -1)"
+            echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+
+            echo "Embedded Library Versions (statically linked)"
+            echo "=============================================="
+            dpkg-query -W -f='${Package} ${Version}\n' \
+              zlib1g-dev libbz2-dev liblzma-dev liblz4-dev \
+              libzstd-dev libssl-dev libxml2-dev 2>/dev/null || true
+            echo ""
+
+            echo "Runtime Dependencies"
+            echo "===================="
+            echo "All compression/crypto libraries statically embedded."
+            echo "Runtime requires only system glibc."
+          } > "$OUT"
+
+      - name: Upload static artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static
+          path: install-static/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Linux shared build (GCC x86_64)
+  # ---------------------------------------------------------------------------
+  linux-shared:
+    needs: [check-release]
+    if: needs.check-release.outputs.should-build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo with submodules
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          submodules: true
+
+      - name: Checkout upstream tag
+        run: |
+          cd libarchive
+          git fetch --tags
+          git checkout ${{ needs.check-release.outputs.tag }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zlib1g-dev libbz2-dev liblzma-dev liblz4-dev libzstd-dev \
+            libxml2-dev libssl-dev
+
+      - name: Build shared library
+        run: |
+          cmake -S libarchive -B build-shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/install-shared \
+            -DBUILD_SHARED_LIBS=ON \
+            -DENABLE_TAR=ON \
+            -DENABLE_CPIO=ON \
+            -DENABLE_CAT=ON \
+            -DENABLE_TEST=OFF
+          cmake --build build-shared --config Release
+          cmake --install build-shared --config Release
+
+      - name: Capture library versions
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          OUT="libarchive-${TAG}-linux-gcc-x64-dynamic-libraries.txt"
+
+          {
+            echo "Build Environment"
+            echo "================="
+            echo "Platform: Linux (GCC x86_64 Dynamic)"
+            echo "Distribution: $(grep PRETTY_NAME /etc/os-release | cut -d= -f2 | tr -d '\"')"
+            echo "Kernel: $(uname -r)"
+            echo "GCC: $(gcc --version | head -1)"
+            echo "Date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+
+            echo "Build Dependency Versions"
+            echo "========================="
+            dpkg-query -W -f='${Package} ${Version}\n' \
+              zlib1g-dev libbz2-dev liblzma-dev liblz4-dev \
+              libzstd-dev libssl-dev libxml2-dev 2>/dev/null || true
+            echo ""
+
+            echo "Linked Libraries (libarchive.so)"
+            echo "================================="
+            ldd install-shared/lib/libarchive.so.* 2>&1 || true
+            echo ""
+
+            echo "Library Package Versions"
+            echo "========================"
+            for lib in $(ldd install-shared/lib/libarchive.so.* 2>/dev/null | grep -oE "/[^ ]+" | sort -u); do
+              pkg_info=$(dpkg -S "$lib" 2>/dev/null | head -1)
+              if [ -n "$pkg_info" ]; then
+                pkg=$(echo "$pkg_info" | sed 's/:.*//')
+                ver=$(dpkg-query -W -f '${Version}' "$pkg" 2>/dev/null || echo "unknown")
+                echo "$pkg ($ver) -> $lib"
+              fi
+            done
+          } > "$OUT"
+
+      - name: Upload shared artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic
+          path: install-shared/
+
+      - name: Upload library info
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries
+          path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries.txt
+
+  # ---------------------------------------------------------------------------
+  # Create GitHub Release with all artifacts
+  # ---------------------------------------------------------------------------
+  release:
+    runs-on: ubuntu-latest
+    needs: [check-release, windows-static, windows-shared, windows-mingw-static, windows-mingw-shared, linux-static, linux-shared]
+    if: needs.check-release.outputs.should-build == 'true'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v7.0.0
+        with:
+          path: artifacts/
+
+      - name: Package artifacts
+        run: |
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            # Skip library info directories (they contain txt files)
+            if [[ "$name" == *-libraries ]]; then
+              continue
+            fi
+            if [[ "$name" == *-linux-* ]]; then
+              (cd "$name" && tar czf "../${name}.tar.gz" .)
+            else
+              (cd "$name" && zip -r "../${name}.zip" .)
+            fi
+          done
+          # Move library info txt files to artifacts root
+          find . -name '*-libraries.txt' -exec mv {} . \;
+
+      - name: Prepare release notes
+        run: |
+          TAG="${{ needs.check-release.outputs.tag }}"
+          cat > notes.md << 'NOTES_HEADER'
+          Pre-built binaries of [libarchive TAG](https://github.com/libarchive/libarchive/releases/tag/TAG) for Windows (MSVC / MinGW x64) and Linux (GCC x86_64).
+
+          ## Downloads
+
+          | Artifact | Description |
+          |----------|-------------|
+          | `*-windows-msvc-x64-static.zip` | MSVC: Standalone CLI tools, static `.lib`, self-contained `.dll`, headers |
+          | `*-windows-msvc-x64-dynamic.zip` | MSVC: DLL-linked CLI tools, shared `.dll`, import `.lib`, headers |
+          | `*-windows-mingw-x64-static.zip` | MinGW UCRT64: Static CLI tools, static `.a`, self-contained `.dll`, headers |
+          | `*-windows-mingw-x64-dynamic.zip` | MinGW UCRT64: DLL-linked CLI tools, shared `.dll`, import `.a`, headers |
+          | `*-linux-gcc-x64-static.tar.gz` | Static CLI tools, static `.a`, headers |
+          | `*-linux-gcc-x64-dynamic.tar.gz` | Shared CLI tools, `.so` library, headers |
+
+          See `*-libraries.txt` files for build environment and dependency versions.
+
+          NOTES_HEADER
+
+          # Substitute TAG
+          sed -i "s/TAG/${TAG}/g" notes.md
+
+          # Append library dependency summaries
+          echo "## Library Dependencies" >> notes.md
+          echo "" >> notes.md
+
+          for variant in windows-msvc-x64-static windows-msvc-x64-dynamic \
+                         windows-mingw-x64-static windows-mingw-x64-dynamic \
+                         linux-gcc-x64-static linux-gcc-x64-dynamic; do
+            LIBFILE="artifacts/libarchive-${TAG}-${variant}-libraries.txt"
+            if [ -f "$LIBFILE" ]; then
+              echo "<details>" >> notes.md
+              echo "<summary><b>${variant}</b></summary>" >> notes.md
+              echo "" >> notes.md
+              echo '```' >> notes.md
+              cat "$LIBFILE" >> notes.md
+              echo '```' >> notes.md
+              echo "</details>" >> notes.md
+              echo "" >> notes.md
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ needs.check-release.outputs.tag }}
+          name: libarchive ${{ needs.check-release.outputs.tag }}
+          body_path: notes.md
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            artifacts/*-libraries.txt
