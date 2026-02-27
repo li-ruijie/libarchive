@@ -165,13 +165,13 @@ jobs:
         shell: pwsh
 
       - name: Upload static artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static
           path: install-static/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries.txt
@@ -274,13 +274,13 @@ jobs:
         shell: pwsh
 
       - name: Upload shared artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic
           path: install-shared/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries.txt
@@ -398,13 +398,13 @@ jobs:
           } > "$OUT"
 
       - name: Upload static artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static
           path: install-static/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries.txt
@@ -500,13 +500,13 @@ jobs:
           } > "$OUT"
 
       - name: Upload shared artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic
           path: install-shared/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries.txt
@@ -579,13 +579,13 @@ jobs:
           } > "$OUT"
 
       - name: Upload static artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static
           path: install-static/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries.txt
@@ -669,13 +669,13 @@ jobs:
           } > "$OUT"
 
       - name: Upload shared artifact
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic
           path: install-shared/
 
       - name: Upload library info
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries.txt
