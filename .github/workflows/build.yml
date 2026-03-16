@@ -169,12 +169,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static
           path: install-static/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-static-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Windows shared build (MSVC x64)
@@ -278,12 +280,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic
           path: install-shared/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-msvc-x64-dynamic-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Windows static build (MinGW-w64 UCRT64 x64)
@@ -402,12 +406,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static
           path: install-static/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-static-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Windows shared build (MinGW-w64 UCRT64 x64)
@@ -504,12 +510,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic
           path: install-shared/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-windows-mingw-x64-dynamic-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Linux static build (GCC x86_64)
@@ -583,12 +591,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static
           path: install-static/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-static-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Linux shared build (GCC x86_64)
@@ -673,12 +683,14 @@ jobs:
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic
           path: install-shared/
+          retention-days: 1
 
       - name: Upload library info
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries
           path: libarchive-${{ needs.check-release.outputs.tag }}-linux-gcc-x64-dynamic-libraries.txt
+          retention-days: 1
 
   # ---------------------------------------------------------------------------
   # Create GitHub Release with all artifacts
