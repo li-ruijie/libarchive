@@ -88,7 +88,7 @@ jobs:
       - name: "Pass 1: Build static library + CLI tools"
         run: |
           cmake -S libarchive -B build-static ^
-            -G "Visual Studio 17 2022" -A x64 ^
+            -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_INSTALL_PREFIX=install-static ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
@@ -119,7 +119,7 @@ jobs:
       - name: "Pass 2: Build self-contained DLL"
         run: |
           cmake -S libarchive -B build-static-dll ^
-            -G "Visual Studio 17 2022" -A x64 ^
+            -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
             -DVCPKG_TARGET_TRIPLET=x64-windows-static ^
@@ -209,7 +209,7 @@ jobs:
       - name: Build shared library
         run: |
           cmake -S libarchive -B build-shared ^
-            -G "Visual Studio 17 2022" -A x64 ^
+            -A x64 ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_INSTALL_PREFIX=install-shared ^
             -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%/scripts/buildsystems/vcpkg.cmake ^
