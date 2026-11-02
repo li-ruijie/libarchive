@@ -25,11 +25,18 @@ jobs:
     steps:
       - name: Get tag
         id: get-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
-            TAG=$(curl -s https://api.github.com/repos/libarchive/libarchive/tags | jq -r '.[0].name')
+            # Authenticated, since an anonymous request shares the 60 per hour
+            # limit of the runner's address with other tenants. A refused request
+            # returned an error object, which jq then failed to index, as on
+            # 2026-10-22. -f fails on the HTTP status instead.
+            TAG=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/libarchive/libarchive/tags | jq -r '.[0].name')
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "Using tag: $TAG"
