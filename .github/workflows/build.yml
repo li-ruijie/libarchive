@@ -43,11 +43,14 @@ jobs:
     steps:
       - name: Get tag
         id: get-tag
+        # The input and the tag reach the scripts through env rather than
+        # expression interpolation, so neither is ever parsed as shell.
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="$INPUT_TAG"
           else
             # Authenticated, since an anonymous request shares the 60 per hour
             # limit of the runner's address with other tenants. A refused request
@@ -60,8 +63,9 @@ jobs:
           echo "Using tag: $TAG"
 
       - name: Validate tag format
+        env:
+          TAG: ${{ steps.get-tag.outputs.tag }}
         run: |
-          TAG="${{ steps.get-tag.outputs.tag }}"
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+[a-z]?$ ]]; then
             echo "::error::Invalid tag format '$TAG'. Expected vX.Y.Z (e.g. v3.8.5)"
             exit 1
